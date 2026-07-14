@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Yuyu-tei Price Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <style>
+    :root {
+      --bg: #f5f3ef;
+      --ink: #1a1a1a;
+      --muted: #5c5c5c;
+      --line: #d8d4cc;
+      --up: #1a6b3c;
+      --down: #a31d1d;
+      --surface: #fffefb;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(ellipse at top left, #e8e2d6 0%, transparent 50%),
+        radial-gradient(ellipse at bottom right, #ddd6c8 0%, transparent 45%),
+        var(--bg);
+      color: var(--ink);
+      line-height: 1.45;
+      min-height: 100vh;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+
+    h1 {
+      font-family: "IBM Plex Serif", Georgia, serif;
+      font-weight: 600;
+      font-size: clamp(1.75rem, 4vw, 2.4rem);
+      margin: 0 0 0.35rem;
+      letter-spacing: -0.02em;
+    }
+
+    .sub {
+      color: var(--muted);
+      margin: 0 0 1.75rem;
+      font-size: 0.95rem;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      align-items: center;
+      margin-bottom: 1.25rem;
+    }
+
+    label {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    select {
+      margin-left: 0.4rem;
+      padding: 0.35rem 0.5rem;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--surface);
+      font: inherit;
+    }
+
+    .meta {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    th, td {
+      padding: 0.65rem 0.85rem;
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    th {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-weight: 600;
+      background: #f0ebe3;
+      position: sticky;
+      top: 0;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    tbody tr:hover { background: #f8f5ef; }
+
+    .id {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-size: 0.82rem;
+      white-space: nowrap;
+    }
+
+    .price, .delta {
+      font-family: "IBM Plex Mono", ui-monospace, monospace;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .up { color: var(--up); }
+    .down { color: var(--down); }
+    .flat { color: var(--muted); }
+
+    .status {
+      padding: 2rem;
+      color: var(--muted);
+    }
+
+    .status.error { color: var(--down); }
+
+    @media (max-width: 640px) {
+      th:nth-child(2), td:nth-child(2) { display: none; }
+    }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@600&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <main>
+    <h1>Yuyu-tei Price Monitor</h1>
+    <p class="sub">Gundam Card Game listings from yuyu-tei.jp</p>
+
+    <div class="toolbar">
+      <div>
+        <label for="set-filter">Set</label>
+        <select id="set-filter">
+          <option value="">All sets</option>
+        </select>
+      </div>
+      <div class="meta" id="meta"></div>
+    </div>
+
+    <div class="table-wrap">
+      <div class="status" id="status">Loading prices…</div>
+      <table id="prices" hidden>
+        <thead>
+          <tr>
+            <th>Card ID</th>
+            <th>Set</th>
+            <th>Name</th>
+            <th>Price</th>
+            <th>vs prior</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const tableEl = document.getElementById("prices");
+    const tbody = tableEl.querySelector("tbody");
+    const metaEl = document.getElementById("meta");
+    const filterEl = document.getElementById("set-filter");
+
+    let latestRows = [];
+
+    function yen(n) {
+      return Number(n).toLocaleString("ja-JP") + "円";
+    }
+
+    function cardKey(row) {
+      return [row.URL_Identifier, row.Card_ID, row.Card_Name].join("\0");
+    }
+
+    function render(filterSet) {
+      const rows = filterSet
+        ? latestRows.filter((r) => r.URL_Identifier === filterSet)
+        : latestRows;
+
+      tbody.innerHTML = "";
+      for (const r of rows) {
+        const tr = document.createElement("tr");
+        let trendClass = "flat";
+        let trendText = "—";
+        if (r.delta > 0) {
+          trendClass = "up";
+          trendText = `↑ +${Number(r.delta).toLocaleString("ja-JP")}`;
+        } else if (r.delta < 0) {
+          trendClass = "down";
+          trendText = `↓ ${Number(r.delta).toLocaleString("ja-JP")}`;
+        } else if (r.prior == null) {
+          trendText = "new";
+        }
+
+        tr.innerHTML = `
+          <td class="id">${escapeHtml(r.Card_ID)}</td>
+          <td>${escapeHtml(r.URL_Identifier)}</td>
+          <td>${escapeHtml(r.Card_Name)}</td>
+          <td class="price">${yen(r.Price)}</td>
+          <td class="delta ${trendClass}">${trendText}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    Papa.parse("data/prices.csv", {
+      download: true,
+      header: true,
+      skipEmptyLines: true,
+      complete(results) {
+        const data = results.data.filter((r) => r.Date && r.Card_ID);
+        if (!data.length) {
+          statusEl.textContent = "No price data yet. Run the scraper workflow first.";
+          return;
+        }
+
+        const dates = [...new Set(data.map((r) => r.Date))].sort();
+        const latest = dates[dates.length - 1];
+        const prior = dates.length > 1 ? dates[dates.length - 2] : null;
+
+        const priorMap = new Map();
+        if (prior) {
+          for (const r of data.filter((x) => x.Date === prior)) {
+            priorMap.set(cardKey(r), Number(r.Price));
+          }
+        }
+
+        latestRows = data
+          .filter((r) => r.Date === latest)
+          .map((r) => {
+            const key = cardKey(r);
+            const price = Number(r.Price);
+            const old = priorMap.has(key) ? priorMap.get(key) : null;
+            return {
+              ...r,
+              Price: price,
+              prior: old,
+              delta: old == null ? null : price - old,
+            };
+          })
+          .sort((a, b) =>
+            a.URL_Identifier.localeCompare(b.URL_Identifier) ||
+            a.Card_ID.localeCompare(b.Card_ID) ||
+            a.Card_Name.localeCompare(b.Card_Name)
+          );
+
+        const sets = [...new Set(latestRows.map((r) => r.URL_Identifier))].sort();
+        for (const s of sets) {
+          const opt = document.createElement("option");
+          opt.value = s;
+          opt.textContent = s;
+          filterEl.appendChild(opt);
+        }
+
+        metaEl.textContent = prior
+          ? `Latest: ${latest} · compared to ${prior} · ${latestRows.length} cards`
+          : `Latest: ${latest} · ${latestRows.length} cards (first scrape)`;
+
+        statusEl.hidden = true;
+        tableEl.hidden = false;
+        render("");
+      },
+      error(err) {
+        statusEl.classList.add("error");
+        statusEl.textContent = "Failed to load data/prices.csv: " + err.message;
+      },
+    });
+
+    filterEl.addEventListener("change", () => render(filterEl.value));
+  </script>
+</body>
+</html>
