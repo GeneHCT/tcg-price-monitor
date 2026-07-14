@@ -8,9 +8,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-import requests
+import cloudscraper
 from bs4 import BeautifulSoup
-from curl_cffi import requests as cffi_requests
 
 # --- CSS selectors (update if the site markup changes) ---
 CARD_CONTAINER_SELECTOR = "div.cards-list div.card-product"
@@ -37,8 +36,6 @@ URLS = [
 
 CSV_PATH = Path("data/prices.csv")
 CSV_FIELDS = ["Date", "URL_Identifier", "Card_ID", "Card_Name", "Price"]
-# Chrome TLS impersonation helps avoid bot blocks from GitHub Actions IPs.
-IMPERSONATE = "chrome"
 HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
@@ -58,23 +55,20 @@ def parse_price(text: str) -> int:
     return int(cleaned)
 
 
-def make_session() -> cffi_requests.Session:
-    session = cffi_requests.Session()
-    session.headers.update(HEADERS)
-    # Warm Laravel session cookies before hitting set pages.
-    resp = session.get("https://yuyu-tei.jp/", impersonate=IMPERSONATE, timeout=60)
-    resp.raise_for_status()
-    return session
+def make_scraper():
+    scraper = cloudscraper.create_scraper()
+    scraper.headers.update(HEADERS)
+    return scraper
 
 
-def scrape_page(session: cffi_requests.Session, url: str) -> list[dict]:
+def scrape_page(scraper, url: str) -> list[dict]:
     last_error = None
     for attempt in range(MAX_FETCH_RETRIES):
-        resp = session.get(url, impersonate=IMPERSONATE, timeout=60)
+        resp = scraper.get(url, timeout=60)
         if resp.status_code == 403:
             last_error = resp
+            print(f"  403 on attempt {attempt + 1}/{MAX_FETCH_RETRIES}, retrying…")
             time.sleep(2**attempt)
-            session.get("https://yuyu-tei.jp/", impersonate=IMPERSONATE, timeout=60)
             continue
         resp.raise_for_status()
         break
@@ -180,8 +174,9 @@ def post_discord(message: str) -> None:
         chunks.append(message[:DISCORD_LIMIT])
         message = message[DISCORD_LIMIT:]
 
+    scraper = cloudscraper.create_scraper()
     for chunk in chunks:
-        resp = requests.post(webhook, json={"content": chunk}, timeout=30)
+        resp = scraper.post(webhook, json={"content": chunk}, timeout=30)
         resp.raise_for_status()
 
 
@@ -192,11 +187,11 @@ def main() -> None:
     # Drop any prior rows for today so re-runs replace instead of duplicating.
     existing = [r for r in existing if r["Date"] != today]
 
-    session = make_session()
+    scraper = make_scraper()
     scraped = []
     for url in URLS:
         print(f"Scraping {url} …")
-        page_rows = scrape_page(session, url)
+        page_rows = scrape_page(scraper, url)
         print(f"  {len(page_rows)} cards")
         for row in page_rows:
             scraped.append({"Date": today, **row})
