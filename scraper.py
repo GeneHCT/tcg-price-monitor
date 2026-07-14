@@ -8,7 +8,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-import cloudscraper
+import requests
 from bs4 import BeautifulSoup
 
 # --- CSS selectors (update if the site markup changes) ---
@@ -36,14 +36,9 @@ URLS = [
 
 CSV_PATH = Path("data/prices.csv")
 CSV_FIELDS = ["Date", "URL_Identifier", "Card_ID", "Card_Name", "Price"]
-HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-    "Referer": "https://yuyu-tei.jp/",
-}
+SCRAPER_API = "http://api.scraperapi.com"
 DISCORD_LIMIT = 2000
 MAX_SUMMARY_LINES = 40
-MAX_FETCH_RETRIES = 3
 
 
 def url_identifier(url: str) -> str:
@@ -55,26 +50,11 @@ def parse_price(text: str) -> int:
     return int(cleaned)
 
 
-def make_scraper():
-    scraper = cloudscraper.create_scraper()
-    scraper.headers.update(HEADERS)
-    return scraper
-
-
-def scrape_page(scraper, url: str) -> list[dict]:
-    last_error = None
-    for attempt in range(MAX_FETCH_RETRIES):
-        resp = scraper.get(url, timeout=60)
-        if resp.status_code == 403:
-            last_error = resp
-            print(f"  403 on attempt {attempt + 1}/{MAX_FETCH_RETRIES}, retrying…")
-            time.sleep(2**attempt)
-            continue
-        resp.raise_for_status()
-        break
-    else:
-        last_error.raise_for_status()
-
+def scrape_page(url: str) -> list[dict]:
+    api_key = os.environ["SCRAPER_API_KEY"]
+    payload = {"api_key": api_key, "url": url}
+    resp = requests.get(SCRAPER_API, params=payload, timeout=120)
+    resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
     rows = []
@@ -174,9 +154,8 @@ def post_discord(message: str) -> None:
         chunks.append(message[:DISCORD_LIMIT])
         message = message[DISCORD_LIMIT:]
 
-    scraper = cloudscraper.create_scraper()
     for chunk in chunks:
-        resp = scraper.post(webhook, json={"content": chunk}, timeout=30)
+        resp = requests.post(webhook, json={"content": chunk}, timeout=30)
         resp.raise_for_status()
 
 
@@ -187,11 +166,10 @@ def main() -> None:
     # Drop any prior rows for today so re-runs replace instead of duplicating.
     existing = [r for r in existing if r["Date"] != today]
 
-    scraper = make_scraper()
     scraped = []
     for url in URLS:
         print(f"Scraping {url} …")
-        page_rows = scrape_page(scraper, url)
+        page_rows = scrape_page(url)
         print(f"  {len(page_rows)} cards")
         for row in page_rows:
             scraped.append({"Date": today, **row})
