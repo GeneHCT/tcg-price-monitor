@@ -10,6 +10,7 @@ from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
+from curl_cffi import requests as cffi_requests
 
 # --- CSS selectors (update if the site markup changes) ---
 CARD_CONTAINER_SELECTOR = "div.cards-list div.card-product"
@@ -36,15 +37,16 @@ URLS = [
 
 CSV_PATH = Path("data/prices.csv")
 CSV_FIELDS = ["Date", "URL_Identifier", "Card_ID", "Card_Name", "Price"]
+# Chrome TLS impersonation helps avoid bot blocks from GitHub Actions IPs.
+IMPERSONATE = "chrome"
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    "Referer": "https://yuyu-tei.jp/",
 }
 DISCORD_LIMIT = 2000
 MAX_SUMMARY_LINES = 40
+MAX_FETCH_RETRIES = 3
 
 
 def url_identifier(url: str) -> str:
@@ -56,9 +58,29 @@ def parse_price(text: str) -> int:
     return int(cleaned)
 
 
-def scrape_page(url: str) -> list[dict]:
-    resp = requests.get(url, headers=HEADERS, timeout=60)
+def make_session() -> cffi_requests.Session:
+    session = cffi_requests.Session()
+    session.headers.update(HEADERS)
+    # Warm Laravel session cookies before hitting set pages.
+    resp = session.get("https://yuyu-tei.jp/", impersonate=IMPERSONATE, timeout=60)
     resp.raise_for_status()
+    return session
+
+
+def scrape_page(session: cffi_requests.Session, url: str) -> list[dict]:
+    last_error = None
+    for attempt in range(MAX_FETCH_RETRIES):
+        resp = session.get(url, impersonate=IMPERSONATE, timeout=60)
+        if resp.status_code == 403:
+            last_error = resp
+            time.sleep(2**attempt)
+            session.get("https://yuyu-tei.jp/", impersonate=IMPERSONATE, timeout=60)
+            continue
+        resp.raise_for_status()
+        break
+    else:
+        last_error.raise_for_status()
+
     soup = BeautifulSoup(resp.text, "html.parser")
 
     rows = []
@@ -170,10 +192,11 @@ def main() -> None:
     # Drop any prior rows for today so re-runs replace instead of duplicating.
     existing = [r for r in existing if r["Date"] != today]
 
+    session = make_session()
     scraped = []
     for url in URLS:
         print(f"Scraping {url} …")
-        page_rows = scrape_page(url)
+        page_rows = scrape_page(session, url)
         print(f"  {len(page_rows)} cards")
         for row in page_rows:
             scraped.append({"Date": today, **row})
