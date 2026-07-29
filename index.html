@@ -94,7 +94,7 @@
       padding: 0.65rem 0.85rem;
       text-align: left;
       border-bottom: 1px solid var(--line);
-      vertical-align: top;
+      vertical-align: middle;
     }
 
     th {
@@ -108,9 +108,33 @@
       top: 0;
     }
 
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+
+    th.sortable:hover { color: var(--ink); }
+
+    th.sortable .arrow {
+      margin-left: 0.25rem;
+      opacity: 0.35;
+      font-size: 0.7rem;
+    }
+
+    th.sortable.active .arrow { opacity: 1; color: var(--ink); }
+
     tr:last-child td { border-bottom: none; }
 
     tbody tr:hover { background: #f8f5ef; }
+
+    .thumb {
+      width: 48px;
+      height: auto;
+      border-radius: 2px;
+      display: block;
+      background: #ebe6dc;
+    }
 
     .id {
       font-family: "IBM Plex Mono", ui-monospace, monospace;
@@ -136,7 +160,7 @@
     .status.error { color: var(--down); }
 
     @media (max-width: 640px) {
-      th:nth-child(2), td:nth-child(2) { display: none; }
+      th:nth-child(3), td:nth-child(3) { display: none; }
     }
   </style>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -163,11 +187,12 @@
       <table id="prices" hidden>
         <thead>
           <tr>
+            <th></th>
             <th>Card ID</th>
             <th>Set</th>
             <th>Name</th>
-            <th>Price</th>
-            <th>vs prior</th>
+            <th class="sortable" data-sort="price">Price <span class="arrow">↕</span></th>
+            <th class="sortable" data-sort="delta">vs prior <span class="arrow">↕</span></th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -183,6 +208,8 @@
     const filterEl = document.getElementById("set-filter");
 
     let latestRows = [];
+    let sortKey = null;   // "price" | "delta" | null
+    let sortDir = "desc"; // "asc" | "desc"
 
     function yen(n) {
       return Number(n).toLocaleString("ja-JP") + "円";
@@ -192,10 +219,48 @@
       return [row.URL_Identifier, row.Card_ID, row.Card_Name].join("\0");
     }
 
-    function render(filterSet) {
-      const rows = filterSet
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function sortValue(row, key) {
+      if (key === "price") return row.Price;
+      // Treat "new" / missing prior as 0 so they sort between ups and downs neutrally.
+      return row.delta == null ? 0 : row.delta;
+    }
+
+    function sortedRows(rows) {
+      if (!sortKey) return rows;
+      const dir = sortDir === "asc" ? 1 : -1;
+      return [...rows].sort((a, b) => {
+        const diff = sortValue(a, sortKey) - sortValue(b, sortKey);
+        if (diff !== 0) return diff * dir;
+        return a.Card_ID.localeCompare(b.Card_ID);
+      });
+    }
+
+    function updateSortHeaders() {
+      tableEl.querySelectorAll("th.sortable").forEach((th) => {
+        const active = th.dataset.sort === sortKey;
+        th.classList.toggle("active", active);
+        const arrow = th.querySelector(".arrow");
+        if (!arrow) return;
+        if (!active) arrow.textContent = "↕";
+        else arrow.textContent = sortDir === "asc" ? "↑" : "↓";
+      });
+    }
+
+    function render() {
+      const filterSet = filterEl.value;
+      let rows = filterSet
         ? latestRows.filter((r) => r.URL_Identifier === filterSet)
         : latestRows;
+      rows = sortedRows(rows);
+      updateSortHeaders();
 
       tbody.innerHTML = "";
       for (const r of rows) {
@@ -212,7 +277,12 @@
           trendText = "new";
         }
 
+        const img = r.Image_URL
+          ? `<img class="thumb" src="${escapeHtml(r.Image_URL)}" alt="" loading="lazy" width="48" />`
+          : "";
+
         tr.innerHTML = `
+          <td>${img}</td>
           <td class="id">${escapeHtml(r.Card_ID)}</td>
           <td>${escapeHtml(r.URL_Identifier)}</td>
           <td>${escapeHtml(r.Card_Name)}</td>
@@ -223,13 +293,18 @@
       }
     }
 
-    function escapeHtml(s) {
-      return String(s)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-    }
+    tableEl.querySelectorAll("th.sortable").forEach((th) => {
+      th.addEventListener("click", () => {
+        const key = th.dataset.sort;
+        if (sortKey === key) {
+          sortDir = sortDir === "asc" ? "desc" : "asc";
+        } else {
+          sortKey = key;
+          sortDir = "desc";
+        }
+        render();
+      });
+    });
 
     Papa.parse("data/prices.csv", {
       download: true,
@@ -286,7 +361,7 @@
 
         statusEl.hidden = true;
         tableEl.hidden = false;
-        render("");
+        render();
       },
       error(err) {
         statusEl.classList.add("error");
@@ -294,7 +369,7 @@
       },
     });
 
-    filterEl.addEventListener("change", () => render(filterEl.value));
+    filterEl.addEventListener("change", () => render());
   </script>
 </body>
 </html>

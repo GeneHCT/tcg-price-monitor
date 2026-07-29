@@ -16,6 +16,8 @@ CARD_CONTAINER_SELECTOR = "div.cards-list div.card-product"
 CARD_ID_SELECTOR = "span.d-block.border.border-dark"
 CARD_NAME_SELECTOR = "h4.text-primary.fw-bold"
 CARD_PRICE_SELECTOR = "strong.d-block.text-end"
+CARD_CID_SELECTOR = "input.cart_cid"
+CARD_VER_SELECTOR = "input.cart_ver"
 
 URLS = [
     # Boosters
@@ -23,6 +25,7 @@ URLS = [
     "https://yuyu-tei.jp/sell/gcg/s/gd02",
     "https://yuyu-tei.jp/sell/gcg/s/gd03",
     "https://yuyu-tei.jp/sell/gcg/s/gd04",
+    "https://yuyu-tei.jp/sell/gcg/s/gd05",
     # Starters
     *[f"https://yuyu-tei.jp/sell/gcg/s/st{i:02d}" for i in range(1, 11)],
     # Extra
@@ -35,7 +38,7 @@ URLS = [
 ]
 
 CSV_PATH = Path("data/prices.csv")
-CSV_FIELDS = ["Date", "URL_Identifier", "Card_ID", "Card_Name", "Price"]
+CSV_FIELDS = ["Date", "URL_Identifier", "Card_ID", "Card_Name", "Price", "Image_URL"]
 SCRAPER_API = "http://api.scraperapi.com"
 DISCORD_LIMIT = 2000
 MAX_SUMMARY_LINES = 40
@@ -62,14 +65,23 @@ def scrape_page(url: str) -> list[dict]:
         id_el = card.select_one(CARD_ID_SELECTOR)
         name_el = card.select_one(CARD_NAME_SELECTOR)
         price_el = card.select_one(CARD_PRICE_SELECTOR)
+        cid_el = card.select_one(CARD_CID_SELECTOR)
+        ver_el = card.select_one(CARD_VER_SELECTOR)
         if not id_el or not name_el or not price_el:
             continue
+        image_url = ""
+        if cid_el and ver_el and cid_el.get("value") and ver_el.get("value"):
+            image_url = (
+                f"https://card.yuyu-tei.jp/gcg/front/"
+                f"{ver_el['value']}/{cid_el['value']}.jpg"
+            )
         rows.append(
             {
                 "URL_Identifier": url_identifier(url),
                 "Card_ID": id_el.get_text(strip=True),
                 "Card_Name": name_el.get_text(strip=True),
                 "Price": parse_price(price_el.get_text()),
+                "Image_URL": image_url,
             }
         )
     return rows
